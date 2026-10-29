@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brand Guardian</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1a1d23; --muted: #5d6572; --border: #dfe3e8;
+    --accent: #2f5bea; --accent-text: #ffffff;
+    --pass: #1f8a4c; --review: #b7791f; --fail: #c53030;
+    --critical: #9b1c1c; --high: #c53030; --medium: #b7791f; --low: #2b6cb0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12141a; --panel: #1b1e26; --text: #e6e8ec; --muted: #9aa3b2; --border: #2c313c;
+      --accent: #5b7ff5; --pass: #48bb78; --review: #ecc94b; --fail: #fc8181;
+      --critical: #fc8181; --high: #f6ad55; --medium: #ecc94b; --low: #63b3ed;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; }
+  input { flex: 1 1 320px; min-width: 0; padding: 10px 12px; font-size: 15px; border-radius: 8px;
+          border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  button { padding: 10px 18px; font-size: 15px; font-weight: 600; border: 0; border-radius: 8px;
+           background: var(--accent); color: var(--accent-text); cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .note { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .step { border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 13px; color: var(--muted); }
+  .step b { display: block; color: var(--text); font-size: 14px; }
+  .step.active { border-color: var(--accent); }
+  .step.active b::after { content: " …"; }
+  .step.done b::before { content: "✓ "; color: var(--pass); }
+  .step.err { border-color: var(--fail); }
+  .step.err b::before { content: "✕ "; color: var(--fail); }
+  @media (max-width: 560px) { .steps { grid-template-columns: repeat(2, 1fr); } }
+  .elapsed { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .badge { display: inline-block; font-weight: 700; padding: 4px 12px; border-radius: 999px; border: 2px solid currentColor; }
+  .PASS { color: var(--pass); } .NEEDS_REVIEW { color: var(--review); } .FAIL { color: var(--fail); }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .head a { color: var(--accent); font-size: 14px; }
+  .v { border-left: 4px solid var(--border); padding: 12px 14px; margin-top: 12px; background: var(--bg); border-radius: 0 8px 8px 0; }
+  .v.CRITICAL { border-color: var(--critical); } .v.HIGH { border-color: var(--high); }
+  .v.MEDIUM { border-color: var(--medium); } .v.LOW { border-color: var(--low); }
+  .v .t { font-weight: 600; }
+  .sev { font-size: 12px; font-weight: 700; margin-right: 6px; }
+  .sev.CRITICAL { color: var(--critical); } .sev.HIGH { color: var(--high); }
+  .sev.MEDIUM { color: var(--medium); } .sev.LOW { color: var(--low); }
+  .v dl { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; margin: 8px 0 0; font-size: 14px; }
+  .v dt { color: var(--muted); } .v dd { margin: 0; overflow-wrap: anywhere; }
+  .errors { color: var(--fail); }
+  .rules { color: var(--muted); font-size: 13px; margin-top: 14px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Brand Guardian</h1>
+  <p class="sub">Audit a video ad against FTC and YouTube ad compliance rules.</p>
+
+  <section class="panel">
+    <form id="form">
+      <input id="url" type="text" placeholder="Paste a YouTube URL, e.g. https://www.youtube.com/watch?v=…" required>
+      <button id="go" type="submit">Audit video</button>
+    </form>
+    <p class="note">Videos longer than the MAX_VIDEO_MINUTES limit (default 5 min) are refused to protect your Azure credit. A 30-second ad usually takes 2–5 minutes to audit.</p>
+  </section>
+
+  <section class="panel" id="progress" hidden>
+    <div class="steps" id="steps"></div>
+    <div class="elapsed" id="elapsed"></div>
+    <div class="errors" id="errors"></div>
+  </section>
+
+  <section class="panel" id="result" hidden></section>
+</main>
+
+<script>
+const STEPS = [
+  ["ingest", "Ingest", "Download → Blob Storage"],
+  ["index", "Index", "Video Indexer STT + OCR"],
+  ["retrieve", "Retrieve", "Search rulebooks"],
+  ["audit", "Audit", "AI compliance check"],
+];
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let timer, started;
+
+function renderSteps(job) {
+  const failedAt = job.errors.length ? (job.errors[0].split(":")[0]) : null;
+  $("steps").innerHTML = STEPS.map(([key, name, desc]) => {
+    let cls = "step";
+    if (failedAt === key) cls += " err";
+    else if (job.completed_steps.includes(key)) cls += " done";
+    else if (job.current_step === key) cls += " active";
+    return `<div class="${cls}"><b>${name}</b>${desc}</div>`;
+  }).join("");
+  $("errors").innerHTML = job.errors.map((e) => `<p>${esc(e)}</p>`).join("");
+}
+
+function renderReport(r) {
+  const label = { PASS: "PASS", NEEDS_REVIEW: "NEEDS REVIEW", FAIL: "FAIL" }[r.status] || r.status;
+  const blob = URL.createObjectURL(new Blob([JSON.stringify(r, null, 2)], { type: "application/json" }));
+  const violations = r.violations.length ? r.violations.map((v) => `
+    <div class="v ${esc(v.severity)}">
+      <div class="t"><span class="sev ${esc(v.severity)}">${esc(v.severity)}</span>${esc(v.category)}${v.timestamp ? ` · ${esc(v.timestamp)}` : ""}</div>
+      <dl>
+        <dt>Claim</dt><dd>“${esc(v.claim)}” <span style="color:var(--muted)">(${esc(v.source)})</span></dd>
+        <dt>Rule</dt><dd>${esc(v.rule_reference)}</dd>
+        <dt>Why</dt><dd>${esc(v.explanation)}</dd>
+        <dt>Fix</dt><dd>${esc(v.recommendation)}</dd>
+      </dl>
+    </div>`).join("") : "<p>No violations found.</p>";
+  $("result").innerHTML = `
+    <div class="head"><span class="badge ${esc(r.status)}">${label}</span>
+      <a href="${blob}" download="compliance-report.json">Download JSON</a></div>
+    <p>${esc(r.summary)}</p>
+    <h3 style="margin:16px 0 0">Violations (${r.violations.length})</h3>
+    ${violations}
+    <div class="rules">Rules consulted: ${r.rules_consulted.map(esc).join(", ")}</div>`;
+  $("result").hidden = false;
+}
+
+async function poll(id) {
+  const res = await fetch(`/jobs/${id}`);
+  const job = await res.json();
+  renderSteps(job);
+  $("elapsed").textContent = `Elapsed: ${Math.round((Date.now() - started) / 1000)}s`;
+  if (job.status === "done" || job.status === "failed") {
+    clearInterval(timer);
+    $("go").disabled = false;
+    if (job.report) renderReport(job.report);
+  }
+}
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("go").disabled = true;
+  $("result").hidden = true;
+  $("progress").hidden = false;
+  renderSteps({ completed_steps: [], current_step: "ingest", errors: [] });
+  started = Date.now();
+  try {
+    const res = await fetch("/jobs", { method: "POST", headers: { "Content-Type": "application/json" },
+                                       body: JSON.stringify({ video_url: $("url").value.trim() }) });
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    const { id } = await res.json();
+    timer = setInterval(() => poll(id).catch(() => {}), 3000);
+  } catch (err) {
+    $("errors").textContent = `Could not start audit: ${err.message}`;
+    $("go").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
